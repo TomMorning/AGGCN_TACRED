@@ -12,9 +12,24 @@ Users pick a **High-Concurrency Backend** or **AI Agent System Design** scenario
 | `/backend` | Go, chi, pgx, token-bucket rate limit, DeepSeek OpenAI-compatible SDK |
 | `/supabase` | PostgreSQL schema + golden scenario seeds |
 
+## Product (web)
+
+Modeled on Dataford (personalized prep plans) and CaseTutor (realistic graded mocks):
+
+| Route | What it is |
+|-------|------------|
+| `/` | Marketing site: plan picker hero, how it works, report/roadmap showcase, role guides, ChatGPT comparison, ROI calculator, pricing, FAQ |
+| `/tracks`, `/tracks/[slug]` | Role guides: what each loop tests (weighted focus areas), round format, common pitfalls |
+| `/start` | 3-step plan builder: role → company type → level & interview date |
+| `/app` | Plan home: next stop, readiness score, weighted roadmap, focus areas, recent mocks |
+| `/library` | 12 golden scenarios with role/level/access filters |
+| `/interview/[slug]` | Briefing, then a timed 3-round interview room (structure inserts, dictation, live architecture diagram) |
+| `/report/[id]` | Graded report: overall + per-round scores, 4-dimension scorecard, covered/missed per round, strong-answer checklist, next drill |
+| `/reports`, `/progress` | Mock history and concept mastery |
+
 ## Cloud deploy (Cursor Apps)
 
-The publishable surface is `web/` — a self-contained Next.js app with API routes, PGlite locally, and managed Postgres on publish (`cursor-app.json`). Bind `LLM_API_KEY` (DeepSeek) in Cursor Secrets; without it the heuristic Staff Engineer still runs.
+The publishable surface is `web/` — a self-contained Next.js app with API routes, PGlite locally, and managed Postgres on publish (`cursor-app.json`, `migrations/`). Bind `LLM_API_KEY` (DeepSeek) in Cursor Secrets; without it a rubric-driven heuristic grader still runs.
 
 ```bash
 cd web && npm install && npm run dev
@@ -52,16 +67,13 @@ make build   # go build + next build
 
 Without a valid `LLM_API_KEY`, the backend falls back to a deterministic heuristic auditor so the UI remains demoable.
 
-## Flagship scenarios
+## Scenarios
 
-| Slug | Tier |
-|------|------|
-| `llm-gateway-sidecar` | Free |
-| `distributed-rate-limiter` | Free |
-| `financial-graph-rag` | Free |
-| `agentic-workflow-engine` | Pro |
-| `high-freq-inventory-flash-sale` | Pro |
-| `realtime-social-intent-crawler` | Pro |
+Free: `llm-gateway-sidecar`, `distributed-rate-limiter`, `financial-graph-rag`, `llm-inference-serving`, `vector-search-rag-retrieval`, `realtime-chat-presence`.
+
+Pro: `agentic-workflow-engine`, `high-freq-inventory-flash-sale`, `realtime-social-intent-crawler`, `payment-ledger`, `distributed-job-scheduler`, `online-feature-store`.
+
+The Go backend (`backend/`) and `supabase/` seeds cover the original six scenarios; the web app's `migrations/` are the source of truth for the deployed product.
 
 ## Extract as a standalone GitHub repo
 

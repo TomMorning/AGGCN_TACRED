@@ -5,6 +5,7 @@ import { useEffect, useId, useState } from "react";
 type Props = {
   chart: string;
   className?: string;
+  dark?: boolean;
 };
 
 function clientSanitize(chart: string) {
@@ -12,16 +13,16 @@ function clientSanitize(chart: string) {
     .replace(/<[^>]*>/g, "")
     .replace(/javascript:/gi, "")
     .split("\n")
-    .filter((l) => !/^\s*%%{/.test(l))
+    .filter((l) => !/^\s*%%\{/.test(l) && !/^\s*click\s/i.test(l))
     .join("\n")
     .trim()
     .slice(0, 4000);
 }
 
-export default function MermaidCanvas({ chart, className }: Props) {
+export default function MermaidCanvas({ chart, className, dark = false }: Props) {
   const reactId = useId().replace(/:/g, "");
-  const [svg, setSvg] = useState<string>("");
-  const [error, setError] = useState<string>("");
+  const [svg, setSvg] = useState("");
+  const [failed, setFailed] = useState(false);
 
   useEffect(() => {
     let cancelled = false;
@@ -35,27 +36,36 @@ export default function MermaidCanvas({ chart, className }: Props) {
         const mermaid = (await import("mermaid")).default;
         mermaid.initialize({
           startOnLoad: false,
-          theme: "dark",
           securityLevel: "strict",
-          themeVariables: {
-            primaryColor: "#122018",
-            primaryTextColor: "#e8eef6",
-            primaryBorderColor: "#34d399",
-            lineColor: "#64748b",
-            secondaryColor: "#0c1118",
-            tertiaryColor: "#1a2433",
-            background: "#0c1118",
-            fontFamily: "IBM Plex Mono, monospace",
-          },
+          theme: "base",
+          themeVariables: dark
+            ? {
+                primaryColor: "#1F232A",
+                primaryTextColor: "#E8EAED",
+                primaryBorderColor: "#3B4250",
+                lineColor: "#6B7280",
+                background: "#171A1F",
+                fontFamily: "var(--font-mono), monospace",
+                fontSize: "13px",
+              }
+            : {
+                primaryColor: "#FFFFFF",
+                primaryTextColor: "#14161A",
+                primaryBorderColor: "#CFCAC0",
+                lineColor: "#9A968E",
+                background: "#FFFFFF",
+                fontFamily: "var(--font-mono), monospace",
+                fontSize: "13px",
+              },
         });
         const { svg: rendered } = await mermaid.render(`mmd-${reactId}-${Date.now()}`, safe);
         if (!cancelled) {
           setSvg(rendered);
-          setError("");
+          setFailed(false);
         }
-      } catch (e) {
+      } catch {
         if (!cancelled) {
-          setError(e instanceof Error ? e.message : "Failed to render diagram");
+          setFailed(true);
           setSvg("");
         }
       }
@@ -64,24 +74,22 @@ export default function MermaidCanvas({ chart, className }: Props) {
     return () => {
       cancelled = true;
     };
-  }, [chart, reactId]);
+  }, [chart, reactId, dark]);
 
   return (
-    <div className={`relative overflow-hidden ${className || ""}`}>
-      <div className="pointer-events-none absolute inset-x-0 top-0 h-px bg-gradient-to-r from-transparent via-signal/60 to-transparent" />
-      {error ? (
-        <pre className="max-h-64 overflow-auto whitespace-pre-wrap p-4 font-mono text-xs text-slate-400">
+    <div className={`relative overflow-auto ${className || ""}`}>
+      {failed ? (
+        <pre className={`whitespace-pre-wrap p-4 font-mono text-xs ${dark ? "text-white/50" : "text-muted"}`}>
           {clientSanitize(chart)}
         </pre>
       ) : svg ? (
         <div
-          className="flex min-h-[220px] items-center justify-center p-4 [&_svg]:max-w-full"
+          className="flex min-h-[220px] items-center justify-center p-4 [&_svg]:h-auto [&_svg]:max-w-full"
           dangerouslySetInnerHTML={{ __html: svg }}
         />
       ) : (
-        <div className="flex min-h-[220px] flex-col items-center justify-center gap-2 font-mono text-xs text-slate-500">
-          <span className="h-1.5 w-24 animate-pulse rounded-full bg-signal/30" />
-          Architecture canvas idle
+        <div className={`flex min-h-[220px] items-center justify-center text-xs ${dark ? "text-white/40" : "text-muted"}`}>
+          Diagram appears after your first answer
         </div>
       )}
     </div>

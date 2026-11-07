@@ -2,43 +2,51 @@
 @tailwind components;
 @tailwind utilities;
 
-:root {
-  --bg: #07090d;
-  --fg: #e8eef6;
-  --muted: #8b9bb0;
-  --accent: #34d399;
-  --panel: rgba(18, 25, 37, 0.72);
-  --line: rgba(148, 163, 184, 0.18);
-}
-
 html,
 body {
   min-height: 100%;
-  background: var(--bg);
-  color: var(--fg);
-}
-
-body {
-  background-image: theme("backgroundImage.aurora"), theme("backgroundImage.grid");
-  background-size: auto, 48px 48px;
-  background-attachment: fixed;
+  background: #f7f6f2;
+  color: #14161a;
 }
 
 ::selection {
-  background: rgba(52, 211, 153, 0.35);
-  color: #fff;
+  background: rgba(14, 122, 97, 0.18);
 }
 
-.panel {
-  background: var(--panel);
-  border: 1px solid var(--line);
-  backdrop-filter: blur(10px);
+@layer components {
+  .card {
+    @apply rounded-2xl border border-line bg-surface shadow-card;
+  }
+  .btn {
+    @apply inline-flex items-center justify-center gap-2 rounded-lg px-4 py-2.5 text-sm font-medium transition disabled:cursor-not-allowed disabled:opacity-50;
+  }
+  .btn-primary {
+    @apply btn bg-ink text-white hover:bg-ink-soft;
+  }
+  .btn-brand {
+    @apply btn bg-brand text-white hover:bg-brand-deep;
+  }
+  .btn-ghost {
+    @apply btn border border-line bg-surface text-ink hover:border-ink/30;
+  }
+  .eyebrow {
+    @apply font-mono text-[11px] uppercase tracking-[0.18em] text-muted;
+  }
+  .chip {
+    @apply inline-flex items-center gap-1 rounded-full border border-line bg-surface px-2.5 py-1 text-xs text-ink-soft;
+  }
+  .skeleton {
+    @apply rounded-lg bg-gradient-to-r from-line/60 via-line/20 to-line/60 bg-[length:800px_100%] animate-shimmer;
+  }
 }
 
-.terminal-scroll::-webkit-scrollbar {
+.scroll-thin::-webkit-scrollbar {
   width: 8px;
 }
-.terminal-scroll::-webkit-scrollbar-thumb {
-  background: rgba(52, 211, 153, 0.35);
+.scroll-thin::-webkit-scrollbar-thumb {
+  background: rgba(20, 22, 26, 0.15);
   border-radius: 999px;
+}
+.night .scroll-thin::-webkit-scrollbar-thumb {
+  background: rgba(255, 255, 255, 0.15);
 }
