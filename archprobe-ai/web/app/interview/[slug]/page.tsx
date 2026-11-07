@@ -3,35 +3,138 @@
 import { Suspense, useCallback, useEffect, useMemo, useRef, useState } from "react";
 import Link from "next/link";
 import { useParams, useRouter, useSearchParams } from "next/navigation";
-import { ArrowLeft, Clock, Loader2, Lock, Mic, MicOff, Play, Send, ShieldCheck } from "lucide-react";
-import MermaidCanvas from "@/components/MermaidCanvas";
+import {
+  AlertTriangle,
+  ArrowLeft,
+  ArrowRight,
+  Clock,
+  HelpCircle,
+  Loader2,
+  Lock,
+  Mic,
+  MicOff,
+  Play,
+  Send,
+  ShieldCheck,
+} from "lucide-react";
+import DiagramEditor, { STARTER_DIAGRAM } from "@/components/DiagramEditor";
 import { DifficultyTag, Logo } from "@/components/ui";
 import { ROUND_PLAN } from "@/lib/catalog";
 import { MAX_ANSWER_CHARS, MIN_ANSWER_CHARS } from "@/lib/limits";
-import { api, ApiError, type ScenarioDetail, type TranscriptEntry } from "@/lib/api";
+import { api, type ScenarioDetail, type SessionState, type TranscriptEntry } from "@/lib/api";
 
 const ROUND_FOCUS = [
-  "Requirements, API, data model and the core architecture. Say where state lives.",
+  "Scope it first: ask clarifying questions, then cover requirements, API, data model and the core architecture.",
   "The interviewer injects a failure. Give the mechanism, the bound and the recovery path.",
   "Cost, consistency edge cases and what you would cut. Close the loop.",
 ];
 
-const SECTIONS = ["Requirements", "API", "Data model", "Architecture", "Scaling", "Failure modes", "Trade-offs"];
+const SECTIONS = ["Requirements", "Estimates", "API", "Data model", "Architecture", "Failure modes", "Trade-offs"];
 
-const THINKING = ["Reading your answer…", "Checking it against the rubric…", "Choosing where to push…", "Writing the follow-up…"];
+const THINKING = {
+  answer: ["Reading your answer…", "Checking it against the rubric…", "Checking your numbers…", "Deciding where to push…"],
+  clarify: ["Checking the details…"],
+  advance: ["Wrapping up this round…", "Picking what to break next…"],
+};
 
 type SpeechRec = {
   start: () => void;
   stop: () => void;
   continuous: boolean;
   interimResults: boolean;
-  onresult: ((e: { resultIndex: number; results: ArrayLike<ArrayLike<{ transcript: string }> & { isFinal: boolean }> }) => void) | null;
+  onresult:
+    | ((e: { resultIndex: number; results: ArrayLike<ArrayLike<{ transcript: string }> & { isFinal: boolean }> }) => void)
+    | null;
   onend: (() => void) | null;
 };
 
 function fmt(sec: number) {
   const s = Math.abs(sec);
   return `${sec < 0 ? "+" : ""}${Math.floor(s / 60)}:${String(s % 60).padStart(2, "0")}`;
+}
+
+function Avatar() {
+  return (
+    <span className="grid h-8 w-8 shrink-0 place-items-center rounded-full bg-emerald-400/15 text-xs font-semibold text-emerald-300">
+      SE
+    </span>
+  );
+}
+
+function Message({ t }: { t: TranscriptEntry }) {
+  if (t.role === "system") {
+    return (
+      <div className="flex items-center gap-3 py-1 text-xs text-white/40">
+        <span className="h-px flex-1 bg-white/10" />
+        Round {t.round} complete{t.round_score != null ? ` · ${t.round_score}/100` : ""}
+        <span className="h-px flex-1 bg-white/10" />
+      </div>
+    );
+  }
+  if (t.role === "user") {
+    if (t.kind === "clarify") {
+      return (
+        <div className="ml-11 flex animate-fade-up justify-end">
+          <div className="max-w-[85%] rounded-2xl rounded-tr-sm bg-white/10 px-4 py-2.5 text-sm text-white/85">
+            <span className="mr-1.5 text-[11px] uppercase tracking-wider text-white/40">Question</span>
+            {t.content}
+          </div>
+        </div>
+      );
+    }
+    return (
+      <div className="ml-11 animate-fade-up rounded-2xl border border-white/10 bg-white/[0.04] p-4">
+        <div className="flex items-center justify-between text-xs text-white/40">
+          <span>You · Round {t.round}</span>
+          {t.diagram && <span className="rounded bg-white/10 px-1.5 py-0.5 text-white/60">Diagram attached</span>}
+        </div>
+        <p className="mt-1.5 whitespace-pre-wrap text-sm leading-relaxed text-white/80">{t.content}</p>
+      </div>
+    );
+  }
+  const label =
+    t.kind === "clarify_answer" ? "Interviewer · clarification" : t.kind === "followup" ? "Interviewer · follow-up" : "Interviewer";
+  return (
+    <div className="flex animate-fade-up gap-3">
+      <Avatar />
+      <div className="min-w-0 flex-1">
+        <div className="flex items-center gap-2 text-xs text-white/40">
+          <span>{label}</span>
+          {t.kind === "followup" && t.round_score != null && (
+            <span className="rounded bg-white/10 px-1.5 py-0.5 font-mono text-white/60">so far {t.round_score}</span>
+          )}
+        </div>
+        {t.quote && t.kind === "followup" && !t.content.includes(t.quote.slice(0, 24)) && (
+          <blockquote className="mt-2 border-l-2 border-amber-300/60 pl-3 text-sm italic text-white/55">“{t.quote}”</blockquote>
+        )}
+        <p
+          className={`mt-1.5 whitespace-pre-wrap leading-relaxed ${
+            t.kind === "clarify_answer" ? "text-sm text-white/75" : "text-[15px] text-white/90"
+          }`}
+        >
+          {t.content}
+        </p>
+        {t.numeric_issues && t.numeric_issues.length > 0 && (
+          <div className="mt-3 space-y-1.5">
+            {t.numeric_issues.map((n) => (
+              <p key={n} className="flex gap-2 rounded-md bg-amber-400/10 px-2.5 py-1.5 text-[12px] text-amber-100/90">
+                <AlertTriangle size={13} className="mt-0.5 shrink-0" /> Check your math: {n}
+              </p>
+            ))}
+          </div>
+        )}
+        {t.kind === "followup" && t.detected_gaps && t.detected_gaps.length > 0 && (
+          <div className="mt-3 flex flex-wrap gap-1.5">
+            {t.detected_gaps.slice(0, 2).map((g) => (
+              <span key={g} className="rounded-md bg-rose-400/10 px-2 py-1 text-[11px] text-rose-200/90">
+                Not yet covered · {g}
+              </span>
+            ))}
+          </div>
+        )}
+      </div>
+    </div>
+  );
 }
 
 function Room() {
@@ -42,12 +145,10 @@ function Room() {
 
   const [scenario, setScenario] = useState<ScenarioDetail | null>(null);
   const [phase, setPhase] = useState<"loading" | "briefing" | "live" | "finishing" | "error">("loading");
-  const [sessionId, setSessionId] = useState<string | null>(null);
-  const [round, setRound] = useState(1);
-  const [transcript, setTranscript] = useState<TranscriptEntry[]>([]);
-  const [diagram, setDiagram] = useState("");
+  const [session, setSession] = useState<SessionState | null>(null);
   const [answer, setAnswer] = useState("");
-  const [busy, setBusy] = useState(false);
+  const [mode, setMode] = useState<"answer" | "clarify">("answer");
+  const [busy, setBusy] = useState<null | "answer" | "clarify" | "advance">(null);
   const [starting, setStarting] = useState(false);
   const [error, setError] = useState("");
   const [thinkIdx, setThinkIdx] = useState(0);
@@ -55,19 +156,40 @@ function Room() {
   const [roundStart, setRoundStart] = useState(Date.now());
   const [now, setNow] = useState(Date.now());
   const [listening, setListening] = useState(false);
+  const [diagram, setDiagram] = useState(STARTER_DIAGRAM);
+  const [diagramTouched, setDiagramTouched] = useState(false);
+  const [diagramSent, setDiagramSent] = useState("");
   const recRef = useRef<SpeechRec | null>(null);
   const chatRef = useRef<HTMLDivElement>(null);
   const inputRef = useRef<HTMLTextAreaElement>(null);
+  const lastRound = useRef(1);
+  const touchedRef = useRef(false);
 
-  const enterLive = useCallback((id: string, roundNo: number, t: TranscriptEntry[]) => {
-    setSessionId(id);
-    setRound(Math.min(3, Math.max(1, roundNo)));
-    setTranscript(t);
-    const lastDiagram = [...t].reverse().find((e) => e.mermaid_code)?.mermaid_code;
-    if (lastDiagram) setDiagram(lastDiagram);
-    setRoundStart(Date.now());
-    setPhase("live");
+  const markTouched = useCallback((v: boolean) => {
+    touchedRef.current = v;
+    setDiagramTouched(v);
   }, []);
+
+  const applySession = useCallback(
+    (s: SessionState) => {
+      setSession(s);
+      if (s.current_round !== lastRound.current) {
+        lastRound.current = s.current_round;
+        setRoundStart(Date.now());
+      }
+      if (touchedRef.current) return;
+      const mine = [...s.transcript].reverse().find((e) => e.diagram)?.diagram;
+      const ai = [...s.transcript].reverse().find((e) => e.mermaid_code)?.mermaid_code;
+      if (mine) {
+        setDiagram(mine);
+        setDiagramSent(mine);
+        markTouched(true);
+      } else if (ai) {
+        setDiagram(ai);
+      }
+    },
+    [markTouched],
+  );
 
   useEffect(() => {
     let cancelled = false;
@@ -83,7 +205,9 @@ function Room() {
             router.replace(`/report/${s.id}`);
             return;
           }
-          enterLive(s.id, s.current_round, s.transcript);
+          lastRound.current = s.current_round;
+          applySession(s);
+          setPhase("live");
         } else {
           setPhase("briefing");
         }
@@ -97,7 +221,7 @@ function Room() {
     return () => {
       cancelled = true;
     };
-  }, [slug, resumeId, router, enterLive]);
+  }, [slug, resumeId, router, applySession]);
 
   useEffect(() => {
     if (phase !== "live") return;
@@ -107,17 +231,32 @@ function Room() {
 
   useEffect(() => {
     if (!busy) return;
-    const t = setInterval(() => setThinkIdx((i) => Math.min(i + 1, THINKING.length - 1)), 1600);
+    setThinkIdx(0);
+    const list = THINKING[busy];
+    const t = setInterval(() => setThinkIdx((i) => Math.min(i + 1, list.length - 1)), 1600);
     return () => clearInterval(t);
   }, [busy]);
 
   useEffect(() => {
     chatRef.current?.scrollTo({ top: chatRef.current.scrollHeight, behavior: "smooth" });
-  }, [transcript, busy]);
+  }, [session?.transcript.length, busy]);
 
+  const round = session?.current_round || 1;
+  const roundTurn = session?.round_turn || 0;
+  const maxTurns = session?.max_answers_per_round || 2;
+  const clarifyLeft = session?.clarify_left ?? 0;
   const remaining = ROUND_PLAN[round - 1].minutes * 60 - Math.floor((now - roundStart) / 1000);
   const constraints = useMemo(() => Object.entries(scenario?.constraints || {}), [scenario]);
   const mocksLeft = scenario ? scenario.quota.monthly_sessions_limit - scenario.quota.monthly_sessions_used : 0;
+  const minChars = mode === "clarify" ? 8 : MIN_ANSWER_CHARS;
+
+  function onTurnDone(res: SessionState & { status: string }) {
+    applySession(res);
+    if (res.status === "completed") {
+      setPhase("finishing");
+      setTimeout(() => router.push(`/report/${res.id}`), 1400);
+    }
+  }
 
   async function begin() {
     setStarting(true);
@@ -125,7 +264,10 @@ function Room() {
     try {
       const s = await api.start(slug);
       router.replace(`/interview/${slug}?session=${s.id}`);
-      enterLive(s.id, s.current_round, s.transcript);
+      lastRound.current = s.current_round;
+      setRoundStart(Date.now());
+      applySession(s);
+      setPhase("live");
     } catch (e) {
       setError(e instanceof Error ? e.message : "Could not start the interview");
     } finally {
@@ -134,46 +276,47 @@ function Room() {
   }
 
   async function submit() {
-    if (!sessionId || busy || answer.trim().length < MIN_ANSWER_CHARS) return;
+    if (!session || busy || answer.trim().length < minChars) return;
     recRef.current?.stop();
-    setBusy(true);
+    setBusy(mode);
     setError("");
-    setThinkIdx(0);
     const text = answer;
+    const sendDiagram = mode === "answer" && diagramTouched && diagram.trim() !== diagramSent.trim() ? diagram : null;
+    setSession({
+      ...session,
+      transcript: [...session.transcript, { role: "user", kind: mode === "clarify" ? "clarify" : "answer", content: text, round, diagram: sendDiagram || undefined }],
+    });
+    setAnswer("");
     try {
-      const res = await api.submit(sessionId, text);
-      setTranscript((prev) => [
-        ...prev,
-        { role: "user", content: text, round: res.round },
-        {
-          role: "interviewer",
-          content: res.interviewer,
-          round: res.round,
-          detected_gaps: res.analysis.missed_critical_gaps,
-          mermaid_code: res.mermaid_diagram,
-          round_score: res.analysis.round_score,
-        },
-      ]);
-      if (res.mermaid_diagram) setDiagram(res.mermaid_diagram);
-      setAnswer("");
-      if (res.status === "completed") {
-        setPhase("finishing");
-        setTimeout(() => router.push(`/report/${sessionId}`), 1400);
-      } else {
-        setRound(Math.min(3, res.next_round));
-        setRoundStart(Date.now());
-      }
+      const res = await api.submit(session.id, { answer: text, mode, diagram: sendDiagram });
+      if (sendDiagram) setDiagramSent(sendDiagram);
+      if (mode === "clarify" && res.clarify_left === 0) setMode("answer");
+      onTurnDone(res);
     } catch (e) {
-      setError(e instanceof ApiError || e instanceof Error ? e.message : "Submit failed");
+      setSession(session);
+      setAnswer(text);
+      setError(e instanceof Error ? e.message : "Submit failed");
     } finally {
-      setBusy(false);
+      setBusy(null);
+    }
+  }
+
+  async function advance() {
+    if (!session || busy) return;
+    setBusy("advance");
+    setError("");
+    try {
+      onTurnDone(await api.advance(session.id));
+    } catch (e) {
+      setError(e instanceof Error ? e.message : "Could not move on");
+    } finally {
+      setBusy(null);
     }
   }
 
   function insertSection(name: string) {
     const prefix = answer && !answer.endsWith("\n") ? "\n\n" : "";
-    const next = `${answer}${prefix}${name}:\n`;
-    setAnswer(next.slice(0, MAX_ANSWER_CHARS));
+    setAnswer(`${answer}${prefix}${name}:\n`.slice(0, MAX_ANSWER_CHARS));
     requestAnimationFrame(() => inputRef.current?.focus());
   }
 
@@ -185,7 +328,7 @@ function Room() {
     const w = window as unknown as { SpeechRecognition?: new () => SpeechRec; webkitSpeechRecognition?: new () => SpeechRec };
     const Ctor = w.SpeechRecognition || w.webkitSpeechRecognition;
     if (!Ctor) {
-      setError("Dictation is not supported in this browser.");
+      setError("Dictation isn't supported in this browser. Try Chrome or Edge.");
       return;
     }
     const rec = new Ctor();
@@ -288,9 +431,10 @@ function Room() {
               <div className="card p-6">
                 <p className="font-semibold">Ready when you are</p>
                 <ul className="mt-4 space-y-2.5 text-sm text-ink-soft">
+                  <li>· Ask clarifying questions first — the interviewer knows details that aren’t in the prompt.</li>
+                  <li>· Each round: your answer, a follow-up on what you said, then the next round.</li>
+                  <li>· Draw your architecture; the interviewer reads it.</li>
                   <li>· The clock is a guide — it won’t cut you off.</li>
-                  <li>· Write like you’d talk: mechanisms, numbers, trade-offs.</li>
-                  <li>· You get a graded report at the end.</li>
                 </ul>
                 <button
                   type="button"
@@ -302,15 +446,14 @@ function Room() {
                   Start interview
                 </button>
                 <p className="mt-3 text-center text-xs text-muted">
-                  {mocksLeft > 0
-                    ? `Uses 1 of your ${mocksLeft} remaining mocks this month`
-                    : "You've used this month's free mocks"}
+                  {mocksLeft > 0 ? `Uses 1 of your ${mocksLeft} remaining mocks this month` : "You’ve used this month’s free mocks"}
                 </p>
                 {error && <p className="mt-3 text-center text-sm text-danger">{error}</p>}
               </div>
               <div className="mt-4 flex gap-3 rounded-xl border border-line bg-surface p-4 text-xs leading-relaxed text-muted">
                 <ShieldCheck size={16} className="mt-0.5 shrink-0 text-brand" />
-                Your answers are sent to the DeepSeek API for grading. Don’t paste confidential details from an employer.
+                Your answers and diagram are sent to the DeepSeek API for grading. Don’t paste confidential details from an
+                employer.
               </div>
             </aside>
           )}
@@ -320,6 +463,9 @@ function Room() {
   }
 
   const timerTone = remaining < 0 ? "text-rose-300" : remaining < 120 ? "text-amber-300" : "text-white/80";
+  const thinking = busy ? THINKING[busy][Math.min(thinkIdx, THINKING[busy].length - 1)] : "";
+  const submitLabel =
+    roundTurn + 1 >= maxTurns ? (round === 3 ? "Submit final answer" : "Submit & close round") : "Submit answer";
 
   return (
     <div className="night flex h-screen flex-col bg-night text-white">
@@ -347,7 +493,7 @@ function Room() {
         </span>
       </header>
 
-      <div className="grid min-h-0 flex-1 lg:grid-cols-[minmax(0,0.85fr)_minmax(0,1.15fr)]">
+      <div className="grid min-h-0 flex-1 lg:grid-cols-[minmax(0,0.9fr)_minmax(0,1.1fr)]">
         <section className="hidden min-h-0 flex-col border-r border-white/10 lg:flex">
           <div className="flex gap-1 border-b border-white/10 px-4 pt-3">
             {(["problem", "diagram"] as const).map((t) => (
@@ -358,6 +504,9 @@ function Room() {
                 className={`rounded-t-md px-3 py-2 text-sm ${tab === t ? "bg-night-3 text-white" : "text-white/50 hover:text-white"}`}
               >
                 {t === "problem" ? "Problem" : "Your architecture"}
+                {t === "diagram" && diagramTouched && diagram.trim() !== diagramSent.trim() && (
+                  <span className="ml-1.5 inline-block h-1.5 w-1.5 rounded-full bg-amber-300 align-middle" />
+                )}
               </button>
             ))}
           </div>
@@ -365,7 +514,9 @@ function Room() {
             {tab === "problem" ? (
               <div className="space-y-5">
                 <div className="rounded-xl border border-emerald-400/20 bg-emerald-400/[0.06] p-4">
-                  <p className="text-[11px] uppercase tracking-wider text-emerald-300/80">This round</p>
+                  <p className="text-[11px] uppercase tracking-wider text-emerald-300/80">
+                    Round {round} · answer {Math.min(roundTurn + 1, maxTurns)} of {maxTurns}
+                  </p>
                   <p className="mt-1 text-sm text-white/85">{ROUND_FOCUS[round - 1]}</p>
                 </div>
                 <p className="whitespace-pre-line text-sm leading-relaxed text-white/80">{scenario.problem_statement}</p>
@@ -376,54 +527,39 @@ function Room() {
                     </span>
                   ))}
                 </div>
+                <button
+                  type="button"
+                  onClick={() => setTab("diagram")}
+                  className="inline-flex items-center gap-1.5 text-sm text-emerald-300 hover:text-emerald-200"
+                >
+                  Draw your architecture <ArrowRight size={14} />
+                </button>
               </div>
             ) : (
-              <MermaidCanvas chart={diagram} dark className="rounded-xl border border-white/10 bg-night-2" />
+              <div className="flex h-full flex-col">
+                <p className="mb-3 text-xs text-white/50">
+                  Edit the diagram as your design evolves. It’s sent with your next answer and the interviewer will critique it.
+                </p>
+                <DiagramEditor
+                  value={diagram}
+                  onChange={(v) => {
+                    setDiagram(v);
+                    markTouched(true);
+                  }}
+                />
+              </div>
             )}
           </div>
         </section>
 
         <section className="flex min-h-0 flex-col">
           <div ref={chatRef} className="scroll-thin min-h-0 flex-1 space-y-5 overflow-y-auto px-4 py-6 md:px-8">
-            {transcript.map((t, i) =>
-              t.role === "interviewer" ? (
-                <div key={i} className="flex animate-fade-up gap-3">
-                  <span className="grid h-8 w-8 shrink-0 place-items-center rounded-full bg-emerald-400/15 text-xs font-semibold text-emerald-300">
-                    SE
-                  </span>
-                  <div className="min-w-0 flex-1">
-                    <div className="flex items-center gap-2 text-xs text-white/40">
-                      <span>Interviewer · Staff Engineer (AI)</span>
-                      {t.round_score != null && t.round_score > 0 && (
-                        <span className="rounded bg-white/10 px-1.5 py-0.5 font-mono text-white/70">R{t.round} · {t.round_score}</span>
-                      )}
-                    </div>
-                    <p className="mt-1.5 whitespace-pre-wrap text-[15px] leading-relaxed text-white/90">{t.content}</p>
-                    {t.detected_gaps && t.detected_gaps.length > 0 && (
-                      <div className="mt-3 flex flex-wrap gap-1.5">
-                        {t.detected_gaps.slice(0, 3).map((g) => (
-                          <span key={g} className="rounded-md bg-rose-400/10 px-2 py-1 text-[11px] text-rose-200/90">
-                            Gap · {g}
-                          </span>
-                        ))}
-                      </div>
-                    )}
-                  </div>
-                </div>
-              ) : (
-                <div key={i} className="ml-11 animate-fade-up rounded-2xl border border-white/10 bg-white/[0.04] p-4">
-                  <p className="text-xs text-white/40">You · Round {t.round}</p>
-                  <p className="mt-1.5 whitespace-pre-wrap text-sm leading-relaxed text-white/80">{t.content}</p>
-                </div>
-              ),
-            )}
+            {session?.transcript.map((t, i) => <Message key={i} t={t} />)}
             {busy && (
               <div className="flex gap-3">
-                <span className="grid h-8 w-8 shrink-0 place-items-center rounded-full bg-emerald-400/15 text-xs font-semibold text-emerald-300">
-                  SE
-                </span>
+                <Avatar />
                 <p className="flex items-center gap-2 pt-1.5 text-sm text-white/60">
-                  <Loader2 size={14} className="animate-spin" /> {THINKING[thinkIdx]}
+                  <Loader2 size={14} className="animate-spin" /> {thinking}
                 </p>
               </div>
             )}
@@ -437,53 +573,95 @@ function Room() {
 
           {phase === "live" && (
             <div className="shrink-0 border-t border-white/10 bg-night-2 p-3 md:p-4">
-              <div className="mb-2 flex flex-wrap gap-1.5">
-                {SECTIONS.map((s) => (
+              <div className="mb-2 flex flex-wrap items-center justify-between gap-2">
+                <div className="flex rounded-lg bg-white/[0.06] p-0.5 text-xs">
                   <button
-                    key={s}
                     type="button"
-                    onClick={() => insertSection(s)}
-                    className="rounded-md border border-white/10 px-2 py-1 text-[11px] text-white/60 hover:border-white/30 hover:text-white"
+                    onClick={() => setMode("answer")}
+                    className={`rounded-md px-3 py-1.5 ${mode === "answer" ? "bg-white text-night" : "text-white/60"}`}
                   >
-                    + {s}
+                    Answer
                   </button>
-                ))}
+                  <button
+                    type="button"
+                    onClick={() => clarifyLeft > 0 && setMode("clarify")}
+                    disabled={clarifyLeft === 0}
+                    className={`inline-flex items-center gap-1 rounded-md px-3 py-1.5 disabled:opacity-40 ${
+                      mode === "clarify" ? "bg-white text-night" : "text-white/60"
+                    }`}
+                  >
+                    <HelpCircle size={12} /> Ask a question · {clarifyLeft} left
+                  </button>
+                </div>
+                {roundTurn >= 1 && (
+                  <button
+                    type="button"
+                    onClick={() => void advance()}
+                    disabled={Boolean(busy)}
+                    className="inline-flex items-center gap-1.5 rounded-md border border-white/15 px-3 py-1.5 text-xs text-white/80 hover:border-white/40 disabled:opacity-40"
+                  >
+                    {round === 3 ? "Finish interview" : `Skip follow-up · go to round ${round + 1}`} <ArrowRight size={13} />
+                  </button>
+                )}
               </div>
+
+              {mode === "answer" && (
+                <div className="mb-2 flex flex-wrap gap-1.5">
+                  {SECTIONS.map((s) => (
+                    <button
+                      key={s}
+                      type="button"
+                      onClick={() => insertSection(s)}
+                      className="rounded-md border border-white/10 px-2 py-1 text-[11px] text-white/60 hover:border-white/30 hover:text-white"
+                    >
+                      + {s}
+                    </button>
+                  ))}
+                </div>
+              )}
               <textarea
                 ref={inputRef}
                 value={answer}
-                onChange={(e) => setAnswer(e.target.value.slice(0, MAX_ANSWER_CHARS))}
+                onChange={(e) => setAnswer(e.target.value.slice(0, mode === "clarify" ? 600 : MAX_ANSWER_CHARS))}
                 onKeyDown={(e) => {
                   if ((e.metaKey || e.ctrlKey) && e.key === "Enter") void submit();
                 }}
-                rows={6}
-                placeholder="Answer the interviewer. Name mechanisms, give numbers, defend trade-offs…"
+                rows={mode === "clarify" ? 2 : 6}
+                placeholder={
+                  mode === "clarify"
+                    ? "e.g. What's the read/write ratio? How bursty is peak traffic?"
+                    : roundTurn === 0
+                      ? "Answer the interviewer. Name mechanisms, give numbers, defend trade-offs…"
+                      : "Respond to the follow-up…"
+                }
                 className="scroll-thin w-full resize-none rounded-xl border border-white/10 bg-night p-4 text-sm leading-relaxed text-white outline-none placeholder:text-white/30 focus:border-white/30"
               />
               <div className="mt-2 flex flex-wrap items-center justify-between gap-3">
                 <div className="flex items-center gap-3">
-                  <button
-                    type="button"
-                    onClick={toggleDictation}
-                    className={`inline-flex items-center gap-1.5 rounded-md px-2.5 py-1.5 text-xs ${
-                      listening ? "bg-rose-500/20 text-rose-200" : "text-white/60 hover:text-white"
-                    }`}
-                  >
-                    {listening ? <MicOff size={14} /> : <Mic size={14} />}
-                    {listening ? "Stop dictation" : "Dictate"}
-                  </button>
+                  {mode === "answer" && (
+                    <button
+                      type="button"
+                      onClick={toggleDictation}
+                      className={`inline-flex items-center gap-1.5 rounded-md px-2.5 py-1.5 text-xs ${
+                        listening ? "bg-rose-500/20 text-rose-200" : "text-white/60 hover:text-white"
+                      }`}
+                    >
+                      {listening ? <MicOff size={14} /> : <Mic size={14} />}
+                      {listening ? "Stop dictation" : "Dictate"}
+                    </button>
+                  )}
                   <span className="font-mono text-[11px] text-white/35">
-                    {answer.trim().length}/{MAX_ANSWER_CHARS} · ⌘↵ to send
+                    {answer.trim().length}/{mode === "clarify" ? 600 : MAX_ANSWER_CHARS} · ⌘↵
                   </span>
                 </div>
                 <button
                   type="button"
                   onClick={() => void submit()}
-                  disabled={busy || answer.trim().length < MIN_ANSWER_CHARS}
+                  disabled={Boolean(busy) || answer.trim().length < minChars}
                   className="btn bg-white text-night hover:bg-white/90"
                 >
-                  {busy ? <Loader2 size={15} className="animate-spin" /> : <Send size={15} />}
-                  {round === 3 ? "Submit final round" : "Submit answer"}
+                  {busy ? <Loader2 size={15} className="animate-spin" /> : mode === "clarify" ? <HelpCircle size={15} /> : <Send size={15} />}
+                  {mode === "clarify" ? "Ask" : submitLabel}
                 </button>
               </div>
               {error && <p className="mt-2 text-sm text-rose-300">{error}</p>}

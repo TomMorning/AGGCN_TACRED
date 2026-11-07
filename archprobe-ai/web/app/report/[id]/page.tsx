@@ -74,8 +74,17 @@ export default function ReportPage() {
               </span>
             </div>
             <h1 className="mt-3 font-display text-3xl leading-tight md:text-4xl">{r.scenario?.title}</h1>
-            <div className="mt-3">
+            <div className="mt-3 flex flex-wrap items-center gap-2">
               <VerdictBadge verdict={r.verdict} />
+              <span
+                className={`rounded-full px-2.5 py-1 text-xs ${
+                  r.clarify_count > 0 ? "bg-paper text-ink-soft" : "bg-warn-soft text-warn"
+                }`}
+              >
+                {r.clarify_count > 0
+                  ? `Asked ${r.clarify_count} clarifying question${r.clarify_count > 1 ? "s" : ""}`
+                  : "No clarifying questions asked"}
+              </span>
             </div>
             {r.audit_report && <p className="mt-4 max-w-2xl leading-relaxed text-ink-soft">{r.audit_report}</p>}
           </div>
@@ -152,6 +161,36 @@ export default function ReportPage() {
         </section>
       </div>
 
+      {r.annotations.length > 0 && (
+        <section className="card mt-6 p-6">
+          <h2 className="font-semibold">Line-by-line feedback</h2>
+          <p className="mt-1 text-sm text-muted">The moments an interviewer would mark down, and how a strong candidate would say it.</p>
+          <ol className="mt-5 space-y-5">
+            {r.annotations.map((a, i) => (
+              <li key={i} className="grid gap-3 md:grid-cols-[auto_1fr]">
+                <span className="hidden h-6 w-6 place-items-center rounded-full bg-paper font-mono text-[11px] text-muted md:grid">
+                  {i + 1}
+                </span>
+                <div className="space-y-2.5">
+                  <div className="flex items-center gap-2 text-xs text-muted">
+                    <span className="rounded bg-paper px-1.5 py-0.5 font-mono">R{a.round}</span> You said
+                  </div>
+                  <blockquote className="border-l-2 border-warn/50 pl-3 text-sm italic text-ink-soft">“{a.quote}”</blockquote>
+                  {a.issue && (
+                    <p className="flex gap-2 text-sm">
+                      <X size={15} className="mt-0.5 shrink-0 text-danger" /> {a.issue}
+                    </p>
+                  )}
+                  <p className="flex gap-2 rounded-lg bg-brand-tint px-3 py-2.5 text-sm text-ink">
+                    <Check size={15} className="mt-0.5 shrink-0 text-brand" /> {a.better}
+                  </p>
+                </div>
+              </li>
+            ))}
+          </ol>
+        </section>
+      )}
+
       {r.strong_answer && r.strong_answer.checklist.length > 0 && (
         <section className="card mt-6 p-6">
           <h2 className="font-semibold">What a strong answer covers</h2>
@@ -192,12 +231,27 @@ export default function ReportPage() {
         </button>
         {showTranscript && (
           <div className="space-y-4 border-t border-line p-6">
-            {r.transcript.map((t, i) => (
-              <div key={i} className={t.role === "user" ? "ml-8 rounded-xl bg-paper p-4" : ""}>
-                <p className="text-xs text-muted">{t.role === "user" ? `You · Round ${t.round}` : "Interviewer"}</p>
-                <p className="mt-1 whitespace-pre-wrap text-sm leading-relaxed">{t.content}</p>
-              </div>
-            ))}
+            {r.transcript.map((t, i) =>
+              t.role === "system" ? (
+                <p key={i} className="text-center text-xs text-muted">
+                  — Round {t.round} complete{t.round_score != null ? ` · ${t.round_score}` : ""} —
+                </p>
+              ) : (
+                <div key={i} className={t.role === "user" ? "ml-8 rounded-xl bg-paper p-4" : ""}>
+                  <p className="text-xs text-muted">
+                    {t.role === "user"
+                      ? `You · Round ${t.round}${t.kind === "clarify" ? " · question" : ""}`
+                      : t.kind === "clarify_answer"
+                        ? "Interviewer · clarification"
+                        : "Interviewer"}
+                  </p>
+                  {t.quote && !t.content.includes(t.quote.slice(0, 24)) && (
+                    <p className="mt-1 text-sm italic text-muted">“{t.quote}”</p>
+                  )}
+                  <p className="mt-1 whitespace-pre-wrap text-sm leading-relaxed">{t.content}</p>
+                </div>
+              ),
+            )}
           </div>
         )}
       </section>

@@ -22,6 +22,15 @@ export function validateAnswer(answer: string): string {
   return trimmed;
 }
 
+export function validateQuestion(question: string): string {
+  const trimmed = question.trim();
+  if (trimmed.length < 8) throw Object.assign(new Error("Ask a complete question."), { status: 400 });
+  if (trimmed.length > 600) {
+    throw Object.assign(new Error("Keep clarifying questions under 600 characters."), { status: 400 });
+  }
+  return trimmed;
+}
+
 /**
  * Keep only Mermaid flowchart syntax. Strip HTML/JS and unknown directives
  * so rendered SVG is safe under securityLevel: "strict".

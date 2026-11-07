@@ -22,34 +22,30 @@ export type ScenarioDetail = ScenarioSummary & {
 };
 
 export type TranscriptEntry = {
-  role: string;
+  role: "user" | "interviewer" | "system";
+  kind?: "opening" | "answer" | "clarify" | "clarify_answer" | "followup" | "round_score" | "closing";
   content: string;
   round: number;
+  quote?: string;
   detected_gaps?: string[];
+  numeric_issues?: string[];
   mermaid_code?: string;
+  diagram?: string;
   round_score?: number;
 };
 
 export type SessionState = {
   id: string;
   current_round: number;
+  round_turn: number;
+  clarify_left: number;
+  max_answers_per_round: number;
   status: string;
   transcript: TranscriptEntry[];
 };
 
-export type SubmitResponse = {
-  session_id: string;
-  round: number;
-  next_round: number;
-  status: string;
-  interviewer: string;
-  analysis: {
-    covered_points: string[];
-    missed_critical_gaps: string[];
-    weak_concept_tags: string[];
-    round_score: number;
-  };
-  mermaid_diagram: string;
+export type TurnResponse = SessionState & {
+  last: { kind: string; round_closed: boolean };
 };
 
 export type Stop = {
@@ -109,6 +105,8 @@ export type Report = {
   audit_report: string | null;
   verdict: string | null;
   variant_drill: { concept_tag: string; prompt: string } | null;
+  annotations: Array<{ round: number; quote: string; issue: string; better: string }>;
+  clarify_count: number;
   strong_answer: { checklist: string[]; tradeoffs: string[] } | null;
   next_scenario: { slug: string; title: string } | null;
   created_at: string;
@@ -149,11 +147,13 @@ export const api = {
   start: (slug: string) =>
     request<SessionState>("/api/interviews/start", { method: "POST", body: JSON.stringify({ slug }) }),
   session: (id: string) => request<SessionState>(`/api/interviews/${encodeURIComponent(id)}`),
-  submit: (id: string, answer: string) =>
-    request<SubmitResponse>(`/api/interviews/${encodeURIComponent(id)}/submit`, {
+  submit: (id: string, body: { answer: string; mode: "answer" | "clarify"; diagram?: string | null }) =>
+    request<TurnResponse>(`/api/interviews/${encodeURIComponent(id)}/submit`, {
       method: "POST",
-      body: JSON.stringify({ answer }),
+      body: JSON.stringify(body),
     }),
+  advance: (id: string) =>
+    request<TurnResponse>(`/api/interviews/${encodeURIComponent(id)}/advance`, { method: "POST", body: "{}" }),
   home: () => request<Home>("/api/plan"),
   savePlan: (body: { track: string; company_type: string; level: string; interview_date: string | null }) =>
     request<Home>("/api/plan", { method: "POST", body: JSON.stringify(body) }),

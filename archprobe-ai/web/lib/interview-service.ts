@@ -1,19 +1,22 @@
 import { randomUUID } from "node:crypto";
 import { sql } from "./db";
 import {
+  answerClarification,
   normalizeTag,
   runFinalEval,
   runGapAnalysis,
-  runProbe,
+  runInterviewerTurn,
   tagCategory,
   variantPrompt,
+  type Annotation,
+  type Clarification,
   type FailureMode,
   type GapAnalysis,
   type Rubric,
 } from "./agent";
 import { COMPANY_TYPES, FOCUS_LABELS, LEVELS, TRACKS } from "./catalog";
 import { buildScenarioOrder, mergeWeights } from "./plans";
-import { sanitizeMermaid, validateAnswer } from "./sanitize";
+import { sanitizeMermaid, validateAnswer, validateQuestion } from "./sanitize";
 
 type HttpError = Error & { status: number };
 
@@ -37,14 +40,19 @@ type ScenarioRow = {
   tracks: unknown;
   focus_areas: unknown;
   est_minutes: number | null;
+  clarifications: unknown;
 };
 
 export type TranscriptEntry = {
-  role: string;
+  role: "user" | "interviewer" | "system";
+  kind?: "opening" | "answer" | "clarify" | "clarify_answer" | "followup" | "round_score" | "closing";
   content: string;
   round: number;
+  quote?: string;
   detected_gaps?: string[];
+  numeric_issues?: string[];
   mermaid_code?: string;
+  diagram?: string;
   round_score?: number;
 };
 
@@ -56,6 +64,8 @@ type RoundRecord = {
   weak: string[];
   strong: string[];
   attack?: string;
+  quote?: string;
+  numeric_issues?: string[];
 };
 
 function parseJson<T>(value: unknown, fallback: T): T {
@@ -71,7 +81,7 @@ function parseJson<T>(value: unknown, fallback: T): T {
 }
 
 const SCENARIO_COLUMNS = `id, slug, category, title, difficulty, is_free, problem_statement, constraints,
-  golden_rubric, failure_modes, reference_mermaid, summary, tracks, focus_areas, est_minutes`;
+  golden_rubric, failure_modes, reference_mermaid, summary, tracks, focus_areas, est_minutes, clarifications`;
 
 function currentPeriod() {
   return new Date().toISOString().slice(0, 7);
@@ -193,6 +203,42 @@ export async function passProbability(userId: string): Promise<number | null> {
   return Math.round(Math.max(5, Math.min(98, avg - penalty)));
 }
 
+const MAX_ANSWERS_PER_ROUND = 2;
+const MAX_CLARIFY = 6;
+
+const OPENING =
+  "I'm your interviewer today. Three rounds: high-level design, then I'll break things, then cost and edge cases. Ask me anything you need to scope the problem first — I have details that aren't in the prompt. When you're ready, walk me through requirements and the high-level architecture.";
+
+type SessionRow = {
+  id: string;
+  scenario_id: string;
+  current_round: number;
+  round_turn: number;
+  clarify_count: number;
+  status: string;
+  transcript: unknown;
+  round_scores: unknown;
+};
+
+function sessionView(s: {
+  id: string;
+  current_round: number;
+  round_turn: number;
+  clarify_count: number;
+  status: string;
+  transcript: TranscriptEntry[];
+}) {
+  return {
+    id: s.id,
+    current_round: Math.min(3, Number(s.current_round)),
+    round_turn: Number(s.round_turn || 0),
+    clarify_left: Math.max(0, MAX_CLARIFY - Number(s.clarify_count || 0)),
+    max_answers_per_round: MAX_ANSWERS_PER_ROUND,
+    status: s.status === "grading" ? "in_progress" : s.status,
+    transcript: s.transcript,
+  };
+}
+
 export async function startInterview(userId: string, slug: string) {
   const r = await scenarioRowBySlug(slug);
   if (!r) throw httpError("Scenario not found", 404);
@@ -201,33 +247,27 @@ export async function startInterview(userId: string, slug: string) {
     throw httpError("This scenario is part of Pro.", 402);
   }
 
-  const open = await sql<{ id: string; current_round: number; status: string; transcript: unknown }>(
-    `SELECT id, current_round, status, transcript FROM interview_sessions
+  const open = await sql<SessionRow>(
+    `SELECT id, scenario_id, current_round, round_turn, clarify_count, status, transcript, round_scores
+     FROM interview_sessions
      WHERE user_id = $1 AND scenario_id = $2 AND status IN ('in_progress', 'grading')
        AND created_at > NOW() - INTERVAL '24 hours'
      ORDER BY created_at DESC LIMIT 1`,
     [userId, r.id],
   );
   if (open[0]) {
-    return {
-      id: open[0].id,
-      current_round: Number(open[0].current_round),
-      status: open[0].status,
-      transcript: parseJson<TranscriptEntry[]>(open[0].transcript, []),
-    };
+    return sessionView({ ...open[0], transcript: parseJson<TranscriptEntry[]>(open[0].transcript, []) });
   }
 
   await claimSession(userId);
 
   const id = randomUUID();
-  const opening =
-    "I'm your interviewer today. We have three rounds: high-level design, then I'll break things, then we'll talk cost and edge cases. Start with requirements and the high-level architecture. Tell me where state lives and the hardest trade-off you're making.";
-  const transcript: TranscriptEntry[] = [{ role: "interviewer", content: opening, round: 1 }];
+  const transcript: TranscriptEntry[] = [{ role: "interviewer", kind: "opening", content: OPENING, round: 1 }];
 
   try {
     await sql(
-      `INSERT INTO interview_sessions (id, user_id, scenario_id, current_round, status, transcript, round_scores)
-       VALUES ($1, $2, $3, 1, 'in_progress', $4::jsonb, '[]'::jsonb)`,
+      `INSERT INTO interview_sessions (id, user_id, scenario_id, current_round, round_turn, clarify_count, status, transcript, round_scores)
+       VALUES ($1, $2, $3, 1, 0, 0, 'in_progress', $4::jsonb, '[]'::jsonb)`,
       [id, userId, r.id, JSON.stringify(transcript)],
     );
   } catch (e) {
@@ -235,7 +275,7 @@ export async function startInterview(userId: string, slug: string) {
     throw e;
   }
 
-  return { id, current_round: 1, status: "in_progress", transcript };
+  return sessionView({ id, current_round: 1, round_turn: 0, clarify_count: 0, status: "in_progress", transcript });
 }
 
 async function upsertMastery(userId: string, tag: string, delta: number, failed: boolean) {
@@ -252,175 +292,298 @@ async function upsertMastery(userId: string, tag: string, delta: number, failed:
   );
 }
 
-export async function submitAnswer(userId: string, sessionId: string, answer: string) {
-  const cleanAnswer = validateAnswer(answer);
-
-  const claimed = await sql<{
-    scenario_id: string;
-    current_round: number;
-    transcript: unknown;
-    round_scores: unknown;
-  }>(
+/** Atomically locks the session for one turn so concurrent requests cannot double-spend LLM calls. */
+async function claimTurn(userId: string, sessionId: string) {
+  const claimed = await sql<SessionRow>(
     `UPDATE interview_sessions SET status = 'grading', updated_at = NOW()
      WHERE id = $1 AND user_id = $2
        AND (status = 'in_progress' OR (status = 'grading' AND updated_at < NOW() - INTERVAL '3 minutes'))
-     RETURNING scenario_id, current_round, transcript, round_scores`,
+     RETURNING id, scenario_id, current_round, round_turn, clarify_count, status, transcript, round_scores`,
     [sessionId, userId],
   );
-  if (claimed.length === 0) {
-    const existing = await sql<{ status: string }>(
-      `SELECT status FROM interview_sessions WHERE id = $1 AND user_id = $2`,
-      [sessionId, userId],
-    );
-    if (!existing[0]) throw httpError("Interview not found", 404);
-    if (existing[0].status === "grading") throw httpError("Your previous answer is still being graded.", 409);
-    throw httpError("This interview is already complete.", 409);
+  if (claimed[0]) return claimed[0];
+  const existing = await sql<{ status: string }>(
+    `SELECT status FROM interview_sessions WHERE id = $1 AND user_id = $2`,
+    [sessionId, userId],
+  );
+  if (!existing[0]) throw httpError("Interview not found", 404);
+  if (existing[0].status === "grading") throw httpError("Your previous answer is still being graded.", 409);
+  throw httpError("This interview is already complete.", 409);
+}
+
+async function releaseTurn(userId: string, sessionId: string) {
+  await sql(
+    `UPDATE interview_sessions SET status = 'in_progress', updated_at = NOW() WHERE id = $1 AND user_id = $2 AND status = 'grading'`,
+    [sessionId, userId],
+  );
+}
+
+type TurnState = {
+  sess: SessionRow;
+  scenario: ScenarioRow;
+  rubric: Rubric;
+  failureModes: FailureMode[];
+  transcript: TranscriptEntry[];
+  rounds: RoundRecord[];
+  round: number;
+  roundTurn: number;
+  clarifyCount: number;
+};
+
+async function loadTurn(sess: SessionRow): Promise<TurnState> {
+  const scenario = await scenarioRowById(sess.scenario_id);
+  if (!scenario) throw httpError("Scenario missing", 500);
+  return {
+    sess,
+    scenario,
+    rubric: parseJson<Rubric>(scenario.golden_rubric, {}),
+    failureModes: parseJson<FailureMode[]>(scenario.failure_modes, []),
+    transcript: parseJson<TranscriptEntry[]>(sess.transcript, []),
+    rounds: parseJson<RoundRecord[]>(sess.round_scores, []),
+    round: Math.min(3, Number(sess.current_round)),
+    roundTurn: Number(sess.round_turn || 0),
+    clarifyCount: Number(sess.clarify_count || 0),
+  };
+}
+
+function answersByRound(transcript: TranscriptEntry[]) {
+  const out: Record<number, string[]> = {};
+  for (const t of transcript) if (t.role === "user" && t.kind !== "clarify") (out[t.round] ||= []).push(t.content);
+  return out;
+}
+
+function recordToAnalysis(r: RoundRecord): GapAnalysis {
+  return {
+    covered_points: r.covered,
+    missed_critical_gaps: r.missed,
+    weak_concept_tags: r.weak,
+    strong_concept_tags: r.strong,
+    selected_chaos_attack: r.attack || "",
+    mermaid_diagram: "",
+    round_score: r.score,
+    quote: r.quote || "",
+    numeric_issues: [],
+  };
+}
+
+/** Ends the current round: opens the next one with a new attack, or grades the whole interview after round 3. */
+async function closeRound(st: TurnState, lastAnswer: string) {
+  const record = st.rounds.find((r) => r.round === st.round);
+  if (st.round < 3) {
+    const nextRound = st.round + 1;
+    const probe = await runInterviewerTurn({
+      mode: "next_round",
+      round: nextRound,
+      analysis: record
+        ? { ...recordToAnalysis(record) }
+        : { covered_points: [], missed_critical_gaps: [], selected_chaos_attack: st.failureModes[0]?.attack || "", quote: "" },
+      answer: lastAnswer,
+      rubric: st.rubric,
+    });
+    st.transcript.push({ role: "interviewer", kind: "opening", content: probe, round: nextRound });
+    return { status: "in_progress", nextRound, roundTurn: 0, final: null };
   }
 
-  const sess = claimed[0];
-  try {
-    const scenario = await scenarioRowById(sess.scenario_id);
-    if (!scenario) throw httpError("Scenario missing", 500);
-    const rubric = parseJson<Rubric>(scenario.golden_rubric, {});
-    const failureModes = parseJson<FailureMode[]>(scenario.failure_modes, []);
-    const reference = sanitizeMermaid(scenario.reference_mermaid);
+  const ordered = [1, 2, 3].map((n) => st.rounds.find((r) => r.round === n)).filter((r): r is RoundRecord => Boolean(r));
+  const final = await runFinalEval({
+    rubric: st.rubric,
+    answersByRound: answersByRound(st.transcript),
+    analyses: ordered.map(recordToAnalysis),
+    clarifyCount: st.clarifyCount,
+  });
+  st.transcript.push({
+    role: "interviewer",
+    kind: "closing",
+    content: "That's time. Thanks — I'm writing up the scorecard now.",
+    round: 3,
+  });
+  return { status: "completed", nextRound: 4, roundTurn: 0, final };
+}
 
-    const round = Number(sess.current_round);
-    const transcript = parseJson<TranscriptEntry[]>(sess.transcript, []);
-    const rounds = parseJson<RoundRecord[]>(sess.round_scores, []);
+async function persistTurn(
+  userId: string,
+  st: TurnState,
+  next: { status: string; nextRound: number; roundTurn: number; final: Awaited<ReturnType<typeof runFinalEval>> | null },
+) {
+  const { final } = next;
+  await sql(
+    `UPDATE interview_sessions SET current_round = $2, round_turn = $3, clarify_count = $4, status = $5,
+       transcript = $6::jsonb, round_scores = $7::jsonb,
+       final_score = COALESCE($8, final_score), dimension_scores = COALESCE($9::jsonb, dimension_scores),
+       audit_report = COALESCE($10, audit_report), verdict = COALESCE($11, verdict),
+       variant_drill = COALESCE($12::jsonb, variant_drill), annotations = COALESCE($13::jsonb, annotations),
+       completed_at = CASE WHEN $5 = 'completed' THEN NOW() ELSE completed_at END,
+       updated_at = NOW()
+     WHERE id = $1 AND user_id = $14`,
+    [
+      st.sess.id,
+      next.nextRound,
+      next.roundTurn,
+      st.clarifyCount,
+      next.status,
+      JSON.stringify(st.transcript),
+      JSON.stringify(st.rounds),
+      final?.final_score ?? null,
+      final ? JSON.stringify(final.dimensions) : null,
+      final?.audit_report ?? null,
+      final?.verdict ?? null,
+      final
+        ? JSON.stringify({ concept_tag: final.top_weak_tag, prompt: final.variant_drill_prompt || variantPrompt(final.top_weak_tag) })
+        : null,
+      final ? JSON.stringify(final.annotations) : null,
+      userId,
+    ],
+  );
+  return sessionView({
+    id: st.sess.id,
+    current_round: next.nextRound,
+    round_turn: next.roundTurn,
+    clarify_count: st.clarifyCount,
+    status: next.status,
+    transcript: st.transcript,
+  });
+}
+
+export async function submitTurn(
+  userId: string,
+  sessionId: string,
+  input: { message: string; mode: "answer" | "clarify"; diagram?: string | null },
+) {
+  const message = input.mode === "clarify" ? validateQuestion(input.message) : validateAnswer(input.message);
+  const diagram = input.diagram ? sanitizeMermaid(input.diagram) : "";
+  const st = await loadTurn(await claimTurn(userId, sessionId));
+
+  try {
+    if (input.mode === "clarify") {
+      if (st.clarifyCount >= MAX_CLARIFY) throw httpError("You've used all your clarifying questions. State an assumption and move on.", 400);
+      const facts = parseJson<Clarification[]>(st.scenario.clarifications, []);
+      const reply = await answerClarification({ question: message, facts, title: st.scenario.title });
+      st.clarifyCount += 1;
+      st.transcript.push(
+        { role: "user", kind: "clarify", content: message, round: st.round },
+        { role: "interviewer", kind: "clarify_answer", content: reply, round: st.round },
+      );
+      return {
+        ...(await persistTurn(userId, st, { status: "in_progress", nextRound: st.round, roundTurn: st.roundTurn, final: null })),
+        last: { kind: "clarify_answer", round_closed: false },
+      };
+    }
+
+    const reference = sanitizeMermaid(st.scenario.reference_mermaid);
+    const usedAttacks = st.rounds.map((r) => r.attack).filter((a): a is string => Boolean(a));
     const analysis = await runGapAnalysis({
-      rubric,
-      failureModes,
-      round,
-      answer: cleanAnswer,
+      rubric: st.rubric,
+      failureModes: st.failureModes,
+      round: st.round,
+      answer: message,
       referenceMermaid: reference,
-      priorAnswers: transcript
-        .filter((t) => t.role === "user")
+      priorAnswers: st.transcript
+        .filter((t) => t.role === "user" && t.kind !== "clarify")
         .map((t) => t.content)
         .join("\n\n"),
-      lastQuestion: [...transcript].reverse().find((t) => t.role === "interviewer")?.content,
-      usedAttacks: rounds.map((r) => r.attack).filter((a): a is string => Boolean(a)),
+      lastQuestion: [...st.transcript].reverse().find((t) => t.role === "interviewer" && t.kind !== "clarify_answer")?.content,
+      usedAttacks,
+      diagram,
+      clarifyCount: st.clarifyCount,
     });
-    analysis.mermaid_diagram = sanitizeMermaid(analysis.mermaid_diagram, reference);
-    const probe = await runProbe(round, analysis, cleanAnswer);
+    analysis.mermaid_diagram = diagram || sanitizeMermaid(analysis.mermaid_diagram, reference);
 
     for (const tag of analysis.weak_concept_tags) await upsertMastery(userId, normalizeTag(tag), -12, true);
     for (const tag of analysis.strong_concept_tags) await upsertMastery(userId, normalizeTag(tag), 8, false);
 
-    rounds.push({
-      round,
+    const record: RoundRecord = {
+      round: st.round,
       score: analysis.round_score,
-      covered: analysis.covered_points,
+      covered: [...new Set([...(st.rounds.find((r) => r.round === st.round)?.covered || []), ...analysis.covered_points])].slice(0, 8),
       missed: analysis.missed_critical_gaps,
       weak: analysis.weak_concept_tags,
       strong: analysis.strong_concept_tags,
       attack: analysis.selected_chaos_attack,
+      quote: analysis.quote,
+      numeric_issues: analysis.numeric_issues,
+    };
+    st.rounds = [...st.rounds.filter((r) => r.round !== st.round), record].sort((a, b) => a.round - b.round);
+
+    st.transcript.push({
+      role: "user",
+      kind: "answer",
+      content: message,
+      round: st.round,
+      diagram: diagram || undefined,
     });
-    transcript.push(
-      { role: "user", content: cleanAnswer, round },
-      {
+
+    const roundTurn = st.roundTurn + 1;
+    let next;
+    if (roundTurn < MAX_ANSWERS_PER_ROUND) {
+      const probe = await runInterviewerTurn({ mode: "followup", round: st.round, analysis, answer: message, rubric: st.rubric });
+      st.transcript.push({
         role: "interviewer",
+        kind: "followup",
         content: probe,
-        round,
+        round: st.round,
+        quote: analysis.quote || undefined,
         detected_gaps: analysis.missed_critical_gaps,
+        numeric_issues: analysis.numeric_issues,
         mermaid_code: analysis.mermaid_diagram,
         round_score: analysis.round_score,
-      },
-    );
-
-    let status = "in_progress";
-    let nextRound = round + 1;
-    let final: Awaited<ReturnType<typeof runFinalEval>> | null = null;
-
-    if (round >= 3) {
-      const analyses: GapAnalysis[] = rounds.map((r) => ({
-        covered_points: r.covered,
-        missed_critical_gaps: r.missed,
-        weak_concept_tags: r.weak,
-        strong_concept_tags: r.strong,
-        selected_chaos_attack: "",
-        mermaid_diagram: "",
-        round_score: r.score,
-      }));
-      final = await runFinalEval({
-        rubric,
-        candidateAnswers: transcript.filter((t) => t.role === "user").map((t) => t.content),
-        analyses,
       });
-      status = "completed";
-      nextRound = 4;
-      transcript.push({
-        role: "interviewer",
-        content: "That's time. I'll write up the scorecard now — your report is ready.",
-        round: 3,
+      next = { status: "in_progress", nextRound: st.round, roundTurn, final: null };
+    } else {
+      st.transcript.push({
+        role: "system",
+        kind: "round_score",
+        content: `Round ${st.round} scored ${analysis.round_score}`,
+        round: st.round,
+        detected_gaps: analysis.missed_critical_gaps,
+        numeric_issues: analysis.numeric_issues,
+        mermaid_code: analysis.mermaid_diagram,
+        round_score: analysis.round_score,
       });
+      next = await closeRound(st, message);
     }
 
-    await sql(
-      `UPDATE interview_sessions SET current_round = $2, status = $3, transcript = $4::jsonb, round_scores = $5::jsonb,
-         final_score = $6, dimension_scores = $7::jsonb, audit_report = $8, verdict = $9, variant_drill = $10::jsonb,
-         completed_at = CASE WHEN $3 = 'completed' THEN NOW() ELSE completed_at END,
-         updated_at = NOW()
-       WHERE id = $1 AND user_id = $11`,
-      [
-        sessionId,
-        nextRound,
-        status,
-        JSON.stringify(transcript),
-        JSON.stringify(rounds),
-        final?.final_score ?? null,
-        final ? JSON.stringify(final.dimensions) : null,
-        final?.audit_report ?? null,
-        final?.verdict ?? null,
-        final
-          ? JSON.stringify({ concept_tag: final.top_weak_tag, prompt: final.variant_drill_prompt || variantPrompt(final.top_weak_tag) })
-          : null,
-        userId,
-      ],
-    );
-
     return {
-      session_id: sessionId,
-      round,
-      next_round: nextRound,
-      status,
-      interviewer: probe,
-      analysis: {
-        covered_points: analysis.covered_points,
-        missed_critical_gaps: analysis.missed_critical_gaps,
-        weak_concept_tags: analysis.weak_concept_tags,
-        round_score: analysis.round_score,
-      },
-      mermaid_diagram: analysis.mermaid_diagram,
+      ...(await persistTurn(userId, st, next)),
+      last: { kind: next.status === "completed" ? "closing" : next.nextRound !== st.round ? "opening" : "followup", round_closed: next.nextRound !== st.round },
     };
   } catch (e) {
-    await sql(
-      `UPDATE interview_sessions SET status = 'in_progress', updated_at = NOW() WHERE id = $1 AND user_id = $2 AND status = 'grading'`,
-      [sessionId, userId],
-    );
+    await releaseTurn(userId, sessionId);
+    throw e;
+  }
+}
+
+/** Candidate chooses to skip the follow-up and move to the next round. */
+export async function advanceRound(userId: string, sessionId: string) {
+  const st = await loadTurn(await claimTurn(userId, sessionId));
+  try {
+    if (st.roundTurn < 1) throw httpError("Answer this round at least once before moving on.", 400);
+    const record = st.rounds.find((r) => r.round === st.round);
+    st.transcript.push({
+      role: "system",
+      kind: "round_score",
+      content: `Round ${st.round} scored ${record?.score ?? 0}`,
+      round: st.round,
+      detected_gaps: record?.missed,
+      round_score: record?.score,
+    });
+    const lastAnswer = [...st.transcript].reverse().find((t) => t.role === "user" && t.kind !== "clarify")?.content || "";
+    const next = await closeRound(st, lastAnswer);
+    return { ...(await persistTurn(userId, st, next)), last: { kind: next.status === "completed" ? "closing" : "opening", round_closed: true } };
+  } catch (e) {
+    await releaseTurn(userId, sessionId);
     throw e;
   }
 }
 
 export async function getSession(userId: string, sessionId: string) {
-  const rows = await sql<{
-    id: string;
-    scenario_id: string;
-    current_round: number;
-    status: string;
-    transcript: unknown;
-  }>(
-    `SELECT id, scenario_id, current_round, status, transcript FROM interview_sessions WHERE id = $1 AND user_id = $2`,
+  const rows = await sql<SessionRow>(
+    `SELECT id, scenario_id, current_round, round_turn, clarify_count, status, transcript, round_scores
+     FROM interview_sessions WHERE id = $1 AND user_id = $2`,
     [sessionId, userId],
   );
   const s = rows[0];
   if (!s) return null;
-  return {
-    id: s.id,
-    current_round: Number(s.current_round),
-    status: s.status,
-    transcript: parseJson<TranscriptEntry[]>(s.transcript, []),
-  };
+  return sessionView({ ...s, transcript: parseJson<TranscriptEntry[]>(s.transcript, []) });
 }
 
 async function bestScores(userId: string) {
@@ -474,11 +637,13 @@ export async function getReport(userId: string, sessionId: string) {
     audit_report: string | null;
     verdict: string | null;
     variant_drill: unknown;
+    annotations: unknown;
+    clarify_count: number | null;
     created_at: string | Date;
     completed_at: string | Date | null;
   }>(
     `SELECT id, scenario_id, status, current_round, transcript, round_scores, final_score, dimension_scores,
-            audit_report, verdict, variant_drill, created_at, completed_at
+            audit_report, verdict, variant_drill, annotations, clarify_count, created_at, completed_at
      FROM interview_sessions WHERE id = $1 AND user_id = $2`,
     [sessionId, userId],
   );
@@ -508,6 +673,8 @@ export async function getReport(userId: string, sessionId: string) {
     audit_report: s.audit_report,
     verdict: s.verdict,
     variant_drill: parseJson<{ concept_tag: string; prompt: string } | null>(s.variant_drill, null),
+    annotations: parseJson<Annotation[]>(s.annotations, []),
+    clarify_count: Number(s.clarify_count || 0),
     strong_answer: completed
       ? { checklist: rubric.mandatory || [], tradeoffs: rubric.tradeoffs || [] }
       : null,
