@@ -24,11 +24,7 @@ export default function TrialPanel() {
       setReply(result.interviewer);
       setScore(result.analysis.round_score);
     } catch (e) {
-      setError(
-        e instanceof Error
-          ? `${e.message} — start Postgres/Redis via make up and the Go API via make backend.`
-          : "Request failed",
-      );
+      setError(e instanceof Error ? e.message : "Request failed");
     } finally {
       setBusy(false);
     }

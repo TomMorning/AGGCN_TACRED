@@ -68,7 +68,7 @@ export default function DashboardPage() {
 
         {error && (
           <p className="mt-6 font-mono text-sm text-rose-300">
-            {error} — start the API with `make backend`.
+            {error}
           </p>
         )}
 

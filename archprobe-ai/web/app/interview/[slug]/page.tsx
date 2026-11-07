@@ -126,7 +126,7 @@ export default function InterviewPage() {
         <div className="mx-auto max-w-xl px-6 py-20 text-center">
           <p className="font-display text-2xl text-white">Backend offline</p>
           <p className="mt-3 font-mono text-sm text-rose-300">{error}</p>
-          <p className="mt-4 text-sm text-slate-400">Run `make up` then `make backend` from archprobe-ai/.</p>
+          <p className="mt-4 text-sm text-slate-400">Refresh once the app finishes booting its local sample database.</p>
         </div>
       ) : (
         <div className="grid min-h-[calc(100vh-53px)] lg:grid-cols-2">

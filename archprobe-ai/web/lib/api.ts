@@ -1,4 +1,4 @@
-const API_URL = process.env.NEXT_PUBLIC_API_URL || "http://localhost:8080";
+const API_URL = process.env.NEXT_PUBLIC_API_URL || "";
 
 export type ScenarioSummary = {
   id: string;
@@ -83,7 +83,7 @@ async function request<T>(path: string, init?: RequestInit): Promise<T> {
   });
   const data = await res.json().catch(() => ({}));
   if (!res.ok) {
-    throw new Error(data.error || `Request failed (${res.status})`);
+    throw new Error((data as { error?: string }).error || `Request failed (${res.status})`);
   }
   return data as T;
 }

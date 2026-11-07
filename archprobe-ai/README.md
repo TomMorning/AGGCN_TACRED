@@ -12,7 +12,17 @@ Users pick a **High-Concurrency Backend** or **AI Agent System Design** scenario
 | `/backend` | Go, chi, pgx, token-bucket rate limit, DeepSeek OpenAI-compatible SDK |
 | `/supabase` | PostgreSQL schema + golden scenario seeds |
 
-## Quick start (3 commands)
+## Cloud deploy (Cursor Apps)
+
+The publishable surface is `web/` — a self-contained Next.js app with API routes, PGlite locally, and managed Postgres on publish (`cursor-app.json`). Bind `LLM_API_KEY` (DeepSeek) in Cursor Secrets; without it the heuristic Staff Engineer still runs.
+
+```bash
+cd web && npm install && npm run dev
+```
+
+Publish from the agent via Cursor Apps hosting (private/team recommended so identity gates paid LLM calls).
+
+## Local full stack (Go + Docker)
 
 ```bash
 cp .env.example .env
@@ -20,7 +30,7 @@ cp .env.example .env
 
 make up          # Postgres 16 + Redis 7 (auto-runs schema + seed)
 make backend     # API on :8080
-make web         # UI on :3000
+make web         # UI on :3000 (set NEXT_PUBLIC_API_URL=http://localhost:8080 to hit Go)
 ```
 
 Open [http://localhost:3000](http://localhost:3000) and try the free homepage roast on **llm-gateway-sidecar**.
