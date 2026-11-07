@@ -1,0 +1,12 @@
+.env
+*.exe
+*.test
+backend/bin/
+web/node_modules/
+web/.next/
+web/out/
+web/.env*.local
+.DS_Store
+*.log
+.idea/
+.vscode/
