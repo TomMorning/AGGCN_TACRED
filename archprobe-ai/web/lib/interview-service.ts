@@ -8,6 +8,7 @@ import {
   variantPrompt,
   type GapAnalysis,
 } from "./agent";
+import { sanitizeMermaid, validateAnswer } from "./sanitize";
 
 export type ScenarioRow = {
   id: string;
@@ -103,6 +104,49 @@ export async function getScenarioBySlug(slug: string) {
   };
 }
 
+/** Client-safe scenario payload — never leaks golden rubrics / failure modes. */
+export async function getScenarioForViewer(userId: string, slug: string) {
+  const scenario = await getScenarioBySlug(slug);
+  if (!scenario) return null;
+  const quota = await ensureQuota(userId);
+  const plan = quota?.plan_tier || "free";
+  const unlocked = scenario.is_free || plan !== "free";
+
+  return {
+    id: scenario.id,
+    slug: scenario.slug,
+    category: scenario.category,
+    title: scenario.title,
+    difficulty: scenario.difficulty,
+    is_free: scenario.is_free,
+    locked: !unlocked,
+    plan_tier: plan,
+    constraints: unlocked ? scenario.constraints : {},
+    problem_statement: unlocked
+      ? scenario.problem_statement
+      : "This is a Pro scenario. Upgrade to unlock the full problem statement, chaos probing, and Mermaid auto-draw.",
+    reference_mermaid: unlocked
+      ? sanitizeMermaid(scenario.reference_mermaid)
+      : "graph TD\n  Locked[Pro scenario locked] --> Upgrade",
+    blurb: scenario.problem_statement.slice(0, 140) + "…",
+  };
+}
+
+function publicScenario(scenario: Awaited<ReturnType<typeof getScenarioBySlug>>) {
+  if (!scenario) return null;
+  return {
+    id: scenario.id,
+    slug: scenario.slug,
+    category: scenario.category,
+    title: scenario.title,
+    difficulty: scenario.difficulty,
+    is_free: scenario.is_free,
+    problem_statement: scenario.problem_statement,
+    constraints: scenario.constraints,
+    reference_mermaid: sanitizeMermaid(scenario.reference_mermaid),
+  };
+}
+
 export async function passProbability(userId: string) {
   const rows = await sql<{ mastery_score: number; fail_count: number; pass_count: number }>(
     `SELECT mastery_score, fail_count, pass_count FROM user_concept_mastery WHERE user_id = $1`,
@@ -152,7 +196,7 @@ export async function startInterview(userId: string, slug: string) {
     current_round: 1,
     status: "in_progress",
     transcript,
-    scenario,
+    scenario: publicScenario(scenario),
   };
 }
 
@@ -177,11 +221,7 @@ async function upsertMastery(
 }
 
 export async function submitAnswer(userId: string, sessionId: string, answer: string) {
-  if (answer.trim().length < 20) {
-    throw Object.assign(new Error("answer too short — defend the architecture in more detail"), {
-      status: 400,
-    });
-  }
+  const cleanAnswer = validateAnswer(answer);
   const sessions = await sql<{
     id: string;
     user_id: string;
@@ -214,10 +254,14 @@ export async function submitAnswer(userId: string, sessionId: string, answer: st
     goldenRubric: JSON.stringify(scenario.golden_rubric),
     failureModes: JSON.stringify(scenario.failure_modes),
     round,
-    answer,
+    answer: cleanAnswer,
     referenceMermaid: scenario.reference_mermaid,
   });
-  const probe = await runProbe(round, analysis, answer);
+  analysis.mermaid_diagram = sanitizeMermaid(
+    analysis.mermaid_diagram,
+    sanitizeMermaid(scenario.reference_mermaid),
+  );
+  const probe = await runProbe(round, analysis, cleanAnswer);
 
   for (const tag of analysis.weak_concept_tags) {
     await upsertMastery(userId, tag, tagCategory(tag) || scenario.category, -12, true);
@@ -232,7 +276,7 @@ export async function submitAnswer(userId: string, sessionId: string, answer: st
 
   const transcript = parseJson<TranscriptEntry[]>(sess.transcript, []);
   transcript.push(
-    { role: "user", content: answer, round },
+    { role: "user", content: cleanAnswer, round },
     {
       role: "interviewer",
       content: probe,

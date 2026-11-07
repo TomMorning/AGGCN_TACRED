@@ -12,9 +12,10 @@ export type ScenarioSummary = {
 
 export type Scenario = ScenarioSummary & {
   problem_statement: string;
-  golden_rubric: unknown;
-  failure_modes: unknown;
   reference_mermaid: string;
+  locked?: boolean;
+  plan_tier?: string;
+  blurb?: string;
 };
 
 export type TranscriptEntry = {

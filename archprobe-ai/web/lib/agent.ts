@@ -98,10 +98,15 @@ export function heuristicGapAnalysis(
 export function heuristicProbe(round: number, analysis: GapAnalysis) {
   const ack =
     analysis.covered_points[0] != null
-      ? `Acknowledged: ${analysis.covered_points[0]}.`
-      : "Your sketch names some of the right boxes, but the critical path is still underspecified.";
+      ? `OK — ${analysis.covered_points[0].replace(/^Mentions /i, "you covered ")}.`
+      : "The boxes are there, but the critical path is still hand-wavy.";
   const gap = analysis.missed_critical_gaps[0] || "the hottest shared coordination point";
-  return `${ack} Round ${round} probe — ${analysis.selected_chaos_attack} Blind spot I'm exploiting: ${gap}. Give the concrete mechanism and the numerical bound.`;
+  const weak = analysis.weak_concept_tags[0];
+  return `${ack}
+
+${analysis.selected_chaos_attack}
+
+I'm specifically pressing on: ${gap}${weak ? ` (${weak})` : ""}. Round ${round}/3 — give the mechanism and a numerical bound, not a slogan.`;
 }
 
 export function heuristicFinal(analysis: GapAnalysis) {

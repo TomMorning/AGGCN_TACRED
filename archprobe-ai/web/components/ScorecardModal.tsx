@@ -1,5 +1,6 @@
 "use client";
 
+import Link from "next/link";
 import { X } from "lucide-react";
 
 type Props = {
@@ -82,6 +83,21 @@ export default function ScorecardModal({
             <p className="mt-2 text-sm text-slate-200">{variantDrill.prompt}</p>
           </div>
         )}
+        <div className="mt-6 flex flex-wrap gap-3">
+          <Link
+            href="/dashboard"
+            className="rounded-md bg-signal px-4 py-2 font-mono text-xs font-semibold uppercase tracking-wider text-ink-950"
+          >
+            Open memory dashboard
+          </Link>
+          <button
+            type="button"
+            onClick={onClose}
+            className="rounded-md border border-white/15 px-4 py-2 font-mono text-xs uppercase tracking-wider text-slate-300"
+          >
+            Stay in room
+          </button>
+        </div>
       </div>
     </div>
   );

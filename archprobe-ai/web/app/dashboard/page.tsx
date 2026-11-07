@@ -28,9 +28,7 @@ export default function DashboardPage() {
     try {
       const dash = await getDashboard();
       setData(dash);
-      if (dash.recommended_drills[0]) {
-        setActiveDrill(dash.recommended_drills[0].prompt);
-      }
+      if (dash.recommended_drills[0]) setActiveDrill(dash.recommended_drills[0].prompt);
     } catch (e) {
       setError(e instanceof Error ? e.message : "Failed to load dashboard");
     } finally {
@@ -47,15 +45,18 @@ export default function DashboardPage() {
   return (
     <main className="min-h-screen">
       <SiteHeader />
-      <div className="mx-auto max-w-6xl px-6 pb-20 pt-6 md:px-10">
+      <div className="mx-auto max-w-6xl px-6 pb-20 pt-8 md:px-10">
         <Link href="/" className="inline-flex items-center gap-2 font-mono text-xs text-slate-400 hover:text-signal">
-          <ArrowLeft size={14} /> Back
+          <ArrowLeft size={14} /> Home
         </Link>
 
         <div className="mt-6 flex flex-wrap items-end justify-between gap-4">
           <div>
             <p className="font-mono text-xs uppercase tracking-[0.22em] text-signal">L3 concept memory</p>
-            <h1 className="mt-2 font-display text-4xl text-white">Pass probability radar</h1>
+            <h1 className="mt-2 font-display text-4xl text-white md:text-5xl">Pass probability</h1>
+            <p className="mt-3 max-w-xl text-sm text-slate-400">
+              Weak tags pull harder than wins. Drill the bottom nodes until the Staff bar stops exploiting them.
+            </p>
           </div>
           <button
             type="button"
@@ -66,22 +67,22 @@ export default function DashboardPage() {
           </button>
         </div>
 
-        {error && (
-          <p className="mt-6 font-mono text-sm text-rose-300">
-            {error}
-          </p>
-        )}
+        {error && <p className="mt-6 font-mono text-sm text-rose-300">{error}</p>}
 
         {loading && !data ? (
-          <p className="mt-10 font-mono text-sm text-slate-500">Loading mastery graph…</p>
+          <div className="mt-10 grid gap-4 lg:grid-cols-2">
+            <div className="h-64 animate-pulse rounded-2xl bg-white/5" />
+            <div className="h-64 animate-pulse rounded-2xl bg-white/5" />
+          </div>
         ) : data ? (
           <>
             <div className="mt-10 grid gap-6 lg:grid-cols-[0.9fr_1.1fr]">
-              <div className="panel relative overflow-hidden rounded-2xl p-6">
+              <div className="panel relative overflow-hidden rounded-2xl p-6 md:p-8">
+                <div className="pointer-events-none absolute -right-10 -top-10 h-40 w-40 rounded-full bg-signal/15 blur-3xl" />
                 <p className="font-mono text-[11px] uppercase tracking-wider text-slate-500">Overall</p>
-                <p className="mt-3 font-display text-6xl text-signal">{data.pass_probability.toFixed(1)}%</p>
-                <p className="mt-2 text-sm text-slate-400">
-                  Weighted mastery across weak-concept graph. Failures pull harder than passes.
+                <p className="mt-3 font-display text-6xl text-signal md:text-7xl">
+                  {data.pass_probability.toFixed(0)}
+                  <span className="text-3xl text-slate-500">%</span>
                 </p>
                 <div className="mt-8 space-y-4">
                   {categories.map(([key, value]) => (
@@ -101,7 +102,7 @@ export default function DashboardPage() {
                 </div>
               </div>
 
-              <div className="panel rounded-2xl p-6">
+              <div className="panel rounded-2xl p-6 md:p-8">
                 <div className="flex items-center gap-2 font-mono text-[11px] uppercase tracking-wider text-signal">
                   <Crosshair size={14} /> One-click variant drill
                 </div>
@@ -114,7 +115,7 @@ export default function DashboardPage() {
                       key={d.concept_tag}
                       type="button"
                       onClick={() => setActiveDrill(d.prompt)}
-                      className="rounded border border-white/10 px-3 py-1.5 font-mono text-[11px] text-slate-300 hover:border-signal/40 hover:text-signal"
+                      className="rounded-md border border-white/10 px-3 py-1.5 font-mono text-[11px] text-slate-300 transition hover:border-signal/40 hover:text-signal"
                     >
                       {d.concept_tag}
                     </button>
@@ -122,18 +123,21 @@ export default function DashboardPage() {
                 </div>
                 <Link
                   href="/interview/distributed-rate-limiter"
-                  className="mt-6 inline-flex rounded-md bg-signal px-4 py-2 font-mono text-xs font-semibold uppercase tracking-wider text-ink-950 hover:bg-signal-glow"
+                  className="mt-6 inline-flex rounded-md bg-signal px-4 py-2.5 font-mono text-xs font-semibold uppercase tracking-wider text-ink-950 hover:bg-signal-glow"
                 >
                   Launch twin drill
                 </Link>
               </div>
             </div>
 
-            <div className="mt-10">
+            <div className="mt-12">
               <h2 className="font-display text-2xl text-white">Weakness knowledge graph</h2>
-              <div className="mt-4 divide-y divide-white/10 border-y border-white/10">
+              <div className="mt-4 divide-y divide-white/10 overflow-hidden rounded-2xl border border-white/10">
                 {(data.mastery.length ? data.mastery : []).map((m) => (
-                  <div key={m.concept_tag} className="grid grid-cols-[1.4fr_1fr_auto] items-center gap-3 py-3 md:grid-cols-[1.6fr_1fr_0.6fr_0.6fr]">
+                  <div
+                    key={m.concept_tag}
+                    className="grid grid-cols-[1.4fr_1fr_auto] items-center gap-3 bg-ink-900/30 px-4 py-3 md:grid-cols-[1.6fr_1fr_0.6fr_0.6fr] md:px-5"
+                  >
                     <div>
                       <p className="font-mono text-sm text-slate-100">{m.concept_tag}</p>
                       <p className="font-mono text-[10px] uppercase tracking-wider text-slate-500">
@@ -151,8 +155,8 @@ export default function DashboardPage() {
                   </div>
                 ))}
                 {data.mastery.length === 0 && (
-                  <p className="py-8 font-mono text-sm text-slate-500">
-                    No mastery rows yet. Finish a free roast or interview turn to seed L3 memory.
+                  <p className="bg-ink-900/20 px-5 py-10 font-mono text-sm text-slate-500">
+                    No mastery rows yet. Finish a roast or interview turn to seed L3 memory.
                   </p>
                 )}
               </div>

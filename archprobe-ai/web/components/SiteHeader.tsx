@@ -2,33 +2,32 @@ import Link from "next/link";
 
 export default function SiteHeader() {
   return (
-    <header className="relative z-20 flex items-center justify-between px-6 py-5 md:px-10">
-      <Link href="/" className="group flex items-baseline gap-2">
-        <span className="font-display text-2xl tracking-tight text-white md:text-3xl">
-          ArchProbe
-          <span className="text-signal"> AI</span>
-        </span>
-        <span className="hidden font-mono text-[10px] uppercase tracking-[0.25em] text-slate-500 transition group-hover:text-signal sm:inline">
-          Staff bar simulator
-        </span>
-      </Link>
-      <nav className="flex items-center gap-4 font-mono text-xs uppercase tracking-wider text-slate-400 md:gap-6">
-        <Link href="/#trial" className="hover:text-signal">
-          Free trial
+    <header className="relative z-20 border-b border-white/5 bg-ink-950/40 backdrop-blur-md">
+      <div className="mx-auto flex max-w-6xl items-center justify-between px-6 py-4 md:px-10">
+        <Link href="/" className="group flex items-baseline gap-2">
+          <span className="font-display text-2xl tracking-tight text-white md:text-[1.7rem]">
+            ArchProbe
+            <span className="text-signal"> AI</span>
+          </span>
         </Link>
-        <Link href="/#pricing" className="hover:text-signal">
-          Pricing
-        </Link>
-        <Link href="/dashboard" className="hover:text-signal">
-          Memory
-        </Link>
-        <Link
-          href="/interview/llm-gateway-sidecar"
-          className="rounded-md border border-signal/40 bg-signal/10 px-3 py-1.5 text-signal transition hover:bg-signal/20"
-        >
-          Enter interview
-        </Link>
-      </nav>
+        <nav className="flex items-center gap-5 font-mono text-[11px] uppercase tracking-[0.16em] text-slate-400">
+          <Link href="/#scenarios" className="hidden hover:text-signal sm:inline">
+            Scenarios
+          </Link>
+          <Link href="/#pricing" className="hidden hover:text-signal sm:inline">
+            Pricing
+          </Link>
+          <Link href="/dashboard" className="hover:text-signal">
+            Memory
+          </Link>
+          <Link
+            href="/interview/llm-gateway-sidecar"
+            className="rounded-md bg-signal px-3 py-1.5 font-semibold text-ink-950 transition hover:bg-signal-glow"
+          >
+            Start interview
+          </Link>
+        </nav>
+      </div>
     </header>
   );
 }
